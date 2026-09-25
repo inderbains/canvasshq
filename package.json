@@ -1,0 +1,33 @@
+{
+  "name": "canvasshq",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@supabase/ssr": "latest",
+    "@supabase/supabase-js": "latest",
+    "@turf/boolean-point-in-polygon": "latest",
+    "leaflet": "^1.9.4",
+    "next": "^16.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-leaflet": "latest",
+    "leaflet-draw": "^1.0.4"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.15",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^16.0.0",
+    "typescript": "^5.9.0",
+    "@types/leaflet-draw": "^1.0.13",
+    "@types/geojson": "^7946.0.16"
+  }
+}
