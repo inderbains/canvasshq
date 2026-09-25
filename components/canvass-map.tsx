@@ -211,7 +211,7 @@ export default function CanvassMap({
   const [notes, setNotes] = useState("");
   const [zoom, setZoom] = useState(12);
 
-  const [coverageEnabled, setCoverageEnabled] = useState(false);
+  const [coverageEnabled, setCoverageEnabled] = useState(focusAssigned);
   const [coverageCandidates, setCoverageCandidates] = useState<CoverageCandidate[]>([]);
   const [coverageLoading, setCoverageLoading] = useState(false);
   const [coverageMessage, setCoverageMessage] = useState("");
@@ -475,22 +475,26 @@ export default function CanvassMap({
 
         {canManageCoverage ? (
           <div style={{ marginTop: 14 }}>
-            <button
-              type="button"
-              className={coverageEnabled ? "btn secondary" : "btn"}
-              onClick={() => {
-                setCoverageEnabled((value) => !value);
-                setSelectedCandidate(null);
-                setManualMessage("");
-              }}
-            >
-              {coverageEnabled ? "Hide coverage review" : "Review missing buildings"}
-            </button>
+            {!focusAssigned ? (
+              <button
+                type="button"
+                className={coverageEnabled ? "btn secondary" : "btn"}
+                onClick={() => {
+                  setCoverageEnabled((value) => !value);
+                  setSelectedCandidate(null);
+                  setManualMessage("");
+                }}
+              >
+                {coverageEnabled ? "Hide coverage review" : "Review missing buildings"}
+              </button>
+            ) : null}
             {coverageEnabled ? (
               <div className="alert" style={{ marginTop: 10 }}>
                 {coverageLoading ? "Checking buildings…" : coverageMessage}
                 <div className="small muted" style={{ marginTop: 6 }}>
-                  Orange dots are candidates only. Verify the civic address before adding a door.
+                  {focusAssigned
+                    ? "Orange dots are possible missing doors inside your assigned territory. Tap one, confirm the civic address, and it becomes a normal canvass door."
+                    : "Orange dots are candidates only. Verify the civic address before adding a door."}
                 </div>
               </div>
             ) : null}
