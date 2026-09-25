@@ -58,9 +58,13 @@ export default async function MapPage() {
   }
 
   const canImport = ["owner", "admin"].includes(workspace.role);
-  const canManageCoverage = ["owner", "admin", "coordinator", "team_lead"].includes(
-    workspace.role,
-  );
+  const canManageCoverage = [
+    "owner",
+    "admin",
+    "coordinator",
+    "team_lead",
+    "canvasser",
+  ].includes(workspace.role);
   const readOnly = workspace.role === "viewer";
 
   return (
