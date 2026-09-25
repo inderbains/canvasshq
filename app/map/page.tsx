@@ -28,7 +28,7 @@ export default async function MapPage() {
     supabase,
     workspace.campaignId,
     100000,
-    isCanvasser ? userId : undefined
+    isCanvasser ? userId : undefined,
   );
 
   let assignedTerritories: Feature<Polygon>[] = [];
@@ -58,6 +58,9 @@ export default async function MapPage() {
   }
 
   const canImport = ["owner", "admin"].includes(workspace.role);
+  const canManageCoverage = ["owner", "admin", "coordinator", "team_lead"].includes(
+    workspace.role,
+  );
   const readOnly = workspace.role === "viewer";
 
   return (
@@ -68,7 +71,7 @@ export default async function MapPage() {
           <p>
             {isCanvasser
               ? "Only doors assigned to your account are shown."
-              : "Official boundary plus civic address points. Select a door to record a visit."}
+              : "Official civic address points plus optional building coverage review."}
           </p>
         </div>
 
@@ -86,9 +89,12 @@ export default async function MapPage() {
       <CanvassMapLoader
         addresses={addresses}
         campaignId={workspace.campaignId}
+        organizationId={workspace.organizationId}
+        districtId={workspace.districtId}
         readOnly={readOnly}
         focusAssigned={isCanvasser}
         assignedTerritories={assignedTerritories}
+        canManageCoverage={canManageCoverage}
       />
     </AppShell>
   );
