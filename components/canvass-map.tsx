@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import L from "leaflet";
 import {
   CircleMarker,
@@ -11,7 +11,7 @@ import {
   Tooltip,
   useMap,
 } from "react-leaflet";
-import type { Feature, FeatureCollection, Polygon } from "geojson";
+import type { Feature, FeatureCollection, MultiPolygon, Polygon } from "geojson";
 import type { AddressPoint, CanvassOutcome } from "@/lib/types";
 
 const outcomeColor: Record<CanvassOutcome, string> = {
@@ -22,6 +22,21 @@ const outcomeColor: Record<CanvassOutcome, string> = {
   follow_up: "#805ad5",
   completed: "#138a5b",
 };
+
+type CoverageProperties = {
+  OBJECTID?: number;
+  FACILITY_TYPE?: string | null;
+  LOCATION?: string | null;
+  NAME?: string | null;
+  CIVIC_FACILITY?: string | null;
+  candidate_id: string;
+  centroid_latitude: number;
+  centroid_longitude: number;
+  nearest_address: string | null;
+  nearest_distance_m: number | null;
+};
+
+type CoverageCandidate = Feature<Polygon | MultiPolygon, CoverageProperties>;
 
 function FitBoundary({ boundary }: { boundary: FeatureCollection | null }) {
   const map = useMap();
@@ -42,7 +57,7 @@ function FitAssignedArea({ points }: { points: AddressPoint[] }) {
     if (!points.length) return;
 
     const bounds = L.latLngBounds(
-      points.map((point) => [point.latitude, point.longitude] as L.LatLngTuple)
+      points.map((point) => [point.latitude, point.longitude] as L.LatLngTuple),
     );
 
     if (points.length === 1) {
@@ -54,7 +69,6 @@ function FitAssignedArea({ points }: { points: AddressPoint[] }) {
       });
     }
 
-    // Keep a canvasser focused around the doors assigned to them.
     map.setMaxBounds(bounds.pad(0.35));
     map.options.maxBoundsViscosity = 1.0;
   }, [map, points]);
@@ -62,32 +76,157 @@ function FitAssignedArea({ points }: { points: AddressPoint[] }) {
   return null;
 }
 
+function ZoomWatcher({ onZoom }: { onZoom: (zoom: number) => void }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const update = () => onZoom(map.getZoom());
+    update();
+    map.on("zoomend", update);
+    return () => {
+      map.off("zoomend", update);
+    };
+  }, [map, onZoom]);
+
+  return null;
+}
+
+function CoverageReviewController({
+  enabled,
+  campaignId,
+  onCandidates,
+  onLoading,
+  onMessage,
+}: {
+  enabled: boolean;
+  campaignId: string;
+  onCandidates: (candidates: CoverageCandidate[]) => void;
+  onLoading: (loading: boolean) => void;
+  onMessage: (message: string) => void;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!enabled) {
+      onCandidates([]);
+      onMessage("");
+      return;
+    }
+
+    let controller: AbortController | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const load = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(async () => {
+        if (map.getZoom() < 16) {
+          onCandidates([]);
+          onMessage("Zoom in to street level to review missing buildings.");
+          return;
+        }
+
+        const bounds = map.getBounds();
+        const bbox = [
+          bounds.getWest(),
+          bounds.getSouth(),
+          bounds.getEast(),
+          bounds.getNorth(),
+        ].join(",");
+
+        controller?.abort();
+        controller = new AbortController();
+        onLoading(true);
+        onMessage("Checking visible buildings against campaign address points…");
+
+        try {
+          const response = await fetch(
+            `/api/coverage/buildings?campaignId=${encodeURIComponent(
+              campaignId,
+            )}&bbox=${encodeURIComponent(bbox)}`,
+            { signal: controller.signal },
+          );
+          const data = await response.json();
+
+          if (!response.ok) {
+            onCandidates([]);
+            onMessage(data.error || "Could not review this map area.");
+            return;
+          }
+
+          const candidates = (data.candidates ?? []) as CoverageCandidate[];
+          onCandidates(candidates);
+          onMessage(
+            candidates.length
+              ? `${candidates.length.toLocaleString()} building candidates need address review in this view.`
+              : "No obvious missing building candidates in this view.",
+          );
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          onCandidates([]);
+          onMessage("Could not load building coverage review.");
+        } finally {
+          onLoading(false);
+        }
+      }, 250);
+    };
+
+    load();
+    map.on("moveend", load);
+    map.on("zoomend", load);
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      controller?.abort();
+      map.off("moveend", load);
+      map.off("zoomend", load);
+    };
+  }, [campaignId, enabled, map, onCandidates, onLoading, onMessage]);
+
+  return null;
+}
+
 export default function CanvassMap({
   addresses,
   campaignId,
+  organizationId,
+  districtId,
   readOnly = false,
   focusAssigned = false,
   assignedTerritories = [],
+  canManageCoverage = false,
 }: {
   addresses: AddressPoint[];
   campaignId: string;
+  organizationId: string;
+  districtId: string;
   readOnly?: boolean;
   focusAssigned?: boolean;
   assignedTerritories?: Feature<Polygon>[];
+  canManageCoverage?: boolean;
 }) {
   const [boundary, setBoundary] = useState<FeatureCollection | null>(null);
   const [selected, setSelected] = useState<AddressPoint | null>(null);
   const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState<CanvassOutcome>("contacted");
   const [notes, setNotes] = useState("");
+  const [zoom, setZoom] = useState(12);
+
+  const [coverageEnabled, setCoverageEnabled] = useState(false);
+  const [coverageCandidates, setCoverageCandidates] = useState<CoverageCandidate[]>([]);
+  const [coverageLoading, setCoverageLoading] = useState(false);
+  const [coverageMessage, setCoverageMessage] = useState("");
+  const [selectedCandidate, setSelectedCandidate] = useState<CoverageCandidate | null>(null);
+  const [manualAddress, setManualAddress] = useState("");
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualMessage, setManualMessage] = useState("");
 
   const points = useMemo(
     () =>
       addresses.filter(
         (address) =>
-          Number.isFinite(address.latitude) && Number.isFinite(address.longitude)
+          Number.isFinite(address.latitude) && Number.isFinite(address.longitude),
       ),
-    [addresses]
+    [addresses],
   );
 
   useEffect(() => {
@@ -124,6 +263,49 @@ export default function CanvassMap({
     }
   }
 
+  function chooseCoverageCandidate(candidate: CoverageCandidate) {
+    setSelected(null);
+    setSelectedCandidate(candidate);
+    setManualMessage("");
+    setManualAddress(candidate.properties.LOCATION?.trim() || "");
+  }
+
+  async function addManualDoor() {
+    if (!selectedCandidate || !manualAddress.trim()) return;
+
+    setManualSaving(true);
+    setManualMessage("Adding verified door…");
+
+    const response = await fetch("/api/coverage/manual-door", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        organizationId,
+        campaignId,
+        districtId,
+        fullAddress: manualAddress.trim(),
+        latitude: selectedCandidate.properties.centroid_latitude,
+        longitude: selectedCandidate.properties.centroid_longitude,
+      }),
+    });
+
+    const data = await response.json();
+    setManualSaving(false);
+
+    if (!response.ok) {
+      setManualMessage(data.error || "Could not add this door.");
+      return;
+    }
+
+    setManualMessage(
+      data.assignedTo
+        ? "Door added and automatically assigned with its territory."
+        : "Door added to the campaign.",
+    );
+
+    window.setTimeout(() => window.location.reload(), 700);
+  }
+
   return (
     <div className="map-layout">
       <div className="card map-card">
@@ -137,6 +319,8 @@ export default function CanvassMap({
             attribution='&copy; OpenStreetMap contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+
+          <ZoomWatcher onZoom={setZoom} />
 
           {!focusAssigned && boundary ? (
             <GeoJSON
@@ -167,13 +351,67 @@ export default function CanvassMap({
             />
           ))}
 
+          {canManageCoverage ? (
+            <CoverageReviewController
+              enabled={coverageEnabled}
+              campaignId={campaignId}
+              onCandidates={setCoverageCandidates}
+              onLoading={setCoverageLoading}
+              onMessage={setCoverageMessage}
+            />
+          ) : null}
+
+          {coverageEnabled
+            ? coverageCandidates.map((candidate) => (
+                <Fragment key={`coverage-${candidate.properties.candidate_id}`}>
+                  <GeoJSON
+                    data={candidate}
+                    style={{
+                      color: "#dd7a00",
+                      weight: 2,
+                      fillColor: "#f59e0b",
+                      fillOpacity: 0.08,
+                      dashArray: "5 5",
+                    }}
+                    eventHandlers={{
+                      click: () => chooseCoverageCandidate(candidate),
+                    }}
+                  />
+                  <CircleMarker
+                    center={[
+                      candidate.properties.centroid_latitude,
+                      candidate.properties.centroid_longitude,
+                    ]}
+                    radius={7}
+                    bubblingMouseEvents={false}
+                    pathOptions={{
+                      color: "#9a4b00",
+                      fillColor: "#f59e0b",
+                      fillOpacity: 0.92,
+                      weight: 2,
+                    }}
+                    eventHandlers={{
+                      click: () => chooseCoverageCandidate(candidate),
+                    }}
+                  >
+                    <Tooltip direction="top" opacity={0.96}>
+                      Missing address candidate — click to verify
+                    </Tooltip>
+                  </CircleMarker>
+                </Fragment>
+              ))
+            : null}
+
           {points.map((address) => {
             const current = address.latest_outcome ?? "not_visited";
             const color = outcomeColor[current];
-            const chooseAddress = () => setSelected(address);
+            const chooseAddress = () => {
+              setSelectedCandidate(null);
+              setSelected(address);
+            };
 
             return (
-              <div key={address.id}>
+              <Fragment key={address.id}>
                 <CircleMarker
                   center={[address.latitude, address.longitude]}
                   radius={6}
@@ -185,12 +423,17 @@ export default function CanvassMap({
                     fillOpacity: 0.95,
                     weight: 2,
                   }}
-                  eventHandlers={{
-                    click: chooseAddress,
-                  }}
+                  eventHandlers={{ click: chooseAddress }}
                 >
-                  <Tooltip direction="top" offset={[0, -5]} opacity={0.95}>
-                    {address.full_address}
+                  <Tooltip
+                    direction="top"
+                    offset={[0, -5]}
+                    opacity={0.95}
+                    permanent={zoom >= 18}
+                  >
+                    {zoom >= 18 && address.house_number
+                      ? address.house_number
+                      : address.full_address}
                   </Tooltip>
                   <Popup>
                     <strong>{address.full_address}</strong>
@@ -199,7 +442,6 @@ export default function CanvassMap({
                   </Popup>
                 </CircleMarker>
 
-                {/* Larger invisible hit area makes the door easier to tap on phones/tablets. */}
                 <CircleMarker
                   center={[address.latitude, address.longitude]}
                   radius={13}
@@ -211,11 +453,9 @@ export default function CanvassMap({
                     fillOpacity: 0.01,
                     weight: 0,
                   }}
-                  eventHandlers={{
-                    click: chooseAddress,
-                  }}
+                  eventHandlers={{ click: chooseAddress }}
                 />
-              </div>
+              </Fragment>
             );
           })}
         </MapContainer>
@@ -223,9 +463,7 @@ export default function CanvassMap({
 
       <aside className="card map-side">
         <h2>{focusAssigned ? "My assigned doors" : "Canvass map"}</h2>
-        <p className="muted small">
-          {points.length.toLocaleString()} addresses loaded
-        </p>
+        <p className="muted small">{points.length.toLocaleString()} verified doors loaded</p>
 
         <div className="legend">
           <span>● Not visited</span>
@@ -235,7 +473,80 @@ export default function CanvassMap({
           <span>● Completed</span>
         </div>
 
-        {!selected ? (
+        {canManageCoverage ? (
+          <div style={{ marginTop: 14 }}>
+            <button
+              type="button"
+              className={coverageEnabled ? "btn secondary" : "btn"}
+              onClick={() => {
+                setCoverageEnabled((value) => !value);
+                setSelectedCandidate(null);
+                setManualMessage("");
+              }}
+            >
+              {coverageEnabled ? "Hide coverage review" : "Review missing buildings"}
+            </button>
+            {coverageEnabled ? (
+              <div className="alert" style={{ marginTop: 10 }}>
+                {coverageLoading ? "Checking buildings…" : coverageMessage}
+                <div className="small muted" style={{ marginTop: 6 }}>
+                  Orange dots are candidates only. Verify the civic address before adding a door.
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {selectedCandidate ? (
+          <div className="door-card">
+            <strong>Missing building candidate</strong>
+            <div className="small muted" style={{ marginTop: 6 }}>
+              This building did not match a nearby campaign address point. Confirm the street number before adding it.
+            </div>
+            {selectedCandidate.properties.nearest_address ? (
+              <div className="small muted" style={{ marginTop: 8 }}>
+                Nearest existing door: {selectedCandidate.properties.nearest_address}
+                {selectedCandidate.properties.nearest_distance_m != null
+                  ? ` (${selectedCandidate.properties.nearest_distance_m} m away)`
+                  : ""}
+              </div>
+            ) : null}
+
+            <div className="form" style={{ marginTop: 14 }}>
+              <div className="field">
+                <label>Verified civic address</label>
+                <input
+                  value={manualAddress}
+                  onChange={(event) => setManualAddress(event.target.value)}
+                  placeholder="12246 81 Avenue"
+                />
+              </div>
+
+              {manualMessage ? <div className="alert">{manualMessage}</div> : null}
+
+              <button
+                className="btn"
+                type="button"
+                disabled={manualSaving || !manualAddress.trim()}
+                onClick={addManualDoor}
+              >
+                {manualSaving ? "Adding…" : "Add verified door"}
+              </button>
+
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={() => {
+                  setSelectedCandidate(null);
+                  setManualAddress("");
+                  setManualMessage("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : !selected ? (
           <div className="alert">
             {points.length === 0
               ? "No doors are assigned to this account yet."
@@ -243,7 +554,7 @@ export default function CanvassMap({
                 ? "Read-only map access."
                 : focusAssigned
                   ? "Tap a dot inside your assigned territory to record the visit."
-                  : "Tap any address point to record a visit."}
+                  : "Tap any verified address point to record a visit."}
           </div>
         ) : readOnly ? (
           <div className="door-card">
