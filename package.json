@@ -1,33 +1,27 @@
 {
-  "name": "canvasshq",
-  "version": "0.1.0",
+  "name": "realvolt-social",
+  "version": "0.3.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
-    "start": "next start",
-    "lint": "eslint ."
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
-    "@supabase/ssr": "latest",
-    "@supabase/supabase-js": "latest",
-    "@turf/boolean-point-in-polygon": "latest",
-    "leaflet": "^1.9.4",
     "next": "^16.0.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "react-leaflet": "latest",
-    "leaflet-draw": "^1.0.4"
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@supabase/supabase-js": "^2.0.0",
+    "lucide-react": "^0.468.0"
   },
   "devDependencies": {
-    "@types/leaflet": "^1.9.15",
-    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "eslint": "^9.0.0",
-    "eslint-config-next": "^16.0.0",
-    "typescript": "^5.9.0",
-    "@types/leaflet-draw": "^1.0.13",
-    "@types/geojson": "^7946.0.16"
+    "@types/node": "^22.0.0"
   }
 }
